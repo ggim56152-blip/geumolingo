@@ -1,24 +1,23 @@
-import { and, eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
 import {
+  InsertUser,
+  users,
+  userProfiles,
   InsertUserProfile,
   levels,
   lessons,
+  quizzes,
+  quizOptions,
+  userQuizProgress,
+  userLessonProgress,
+  stocks,
   portfolioItems,
   portfolioTransactions,
-  quizOptions,
-  quizzes,
-  stocks,
-  userLessonProgress,
-  userProfiles,
-  userQuizProgress,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -31,258 +30,160 @@ export async function getDb() {
   return _db;
 }
 
-export async function upsertUser(user: InsertUser): Promise<void> {
-  if (!user.openId) {
-    throw new Error("User openId is required for upsert");
-  }
-
+/**
+ * User Management
+ */
+export async function createUser(email: string, passwordHash: string, name?: string): Promise<number> {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
-    return;
-  }
+  if (!db) throw new Error("Database not available");
 
-  try {
-    const values: InsertUser = {
-      openId: user.openId,
-    };
-    const updateSet: Record<string, unknown> = {};
+  const result = await db.insert(users).values({
+    email,
+    passwordHash,
+    name,
+    emailVerified: 0,
+    loginMethod: "email",
+    role: "user",
+  });
 
-    const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
-
-    if (user.lastSignedIn !== undefined) {
-      values.lastSignedIn = user.lastSignedIn;
-      updateSet.lastSignedIn = user.lastSignedIn;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
-    }
-
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
-  } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
-    throw error;
-  }
+  return result[0].insertId;
 }
 
-export async function getUserByOpenId(openId: string) {
+export async function getUserByEmail(email: string) {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
-    return undefined;
-  }
+  if (!db) return undefined;
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
-// ============================================
-// User Profile Queries
-// ============================================
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function updateLastSignedIn(userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, userId));
+}
+
+export async function verifyUserEmail(userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.update(users).set({ emailVerified: 1, verificationToken: null }).where(eq(users.id, userId));
+}
+
+/**
+ * User Profile Management
+ */
+export async function getOrCreateUserProfile(userId: number): Promise<any> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const existing = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1);
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  await db.insert(userProfiles).values({
+    userId,
+    currentLevel: 1,
+    totalXP: 0,
+    currentXP: 0,
+    streak: 0,
+    totalLessonsCompleted: 0,
+    totalQuizzesCompleted: 0,
+    portfolioValue: 1000000,
+  });
+
+  const newProfile = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1);
+  return newProfile.length > 0 ? newProfile[0] : undefined;
+}
 
 export async function getUserProfile(userId: number) {
   const db = await getDb();
   if (!db) return undefined;
 
-  const result = await db
-    .select()
-    .from(userProfiles)
-    .where(eq(userProfiles.userId, userId))
-    .limit(1);
-
+  const result = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function getOrCreateUserProfile(userId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  let profile = await getUserProfile(userId);
-  if (!profile) {
-    await db.insert(userProfiles).values({ userId });
-    profile = await getUserProfile(userId);
-  }
-  return profile;
-}
-
-export async function updateUserProfile(
-  userId: number,
-  updates: Partial<Omit<InsertUserProfile, 'userId'>>
-) {
+export async function updateUserProfile(userId: number, updates: Partial<InsertUserProfile>): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
-  await db
-    .update(userProfiles)
-    .set(updates)
-    .where(eq(userProfiles.userId, userId));
+  await db.update(userProfiles).set(updates).where(eq(userProfiles.userId, userId));
 }
 
-// ============================================
-// Level & Lesson Queries
-// ============================================
-
+/**
+ * Learning Content
+ */
 export async function getAllLevels() {
   const db = await getDb();
   if (!db) return [];
 
-  return db.select().from(levels).orderBy(levels.order);
-}
-
-export async function getLevelById(levelId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(levels)
-    .where(eq(levels.id, levelId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  return await db.select().from(levels).orderBy(levels.order);
 }
 
 export async function getLessonsByLevel(levelId: number) {
   const db = await getDb();
   if (!db) return [];
 
-  return db
-    .select()
-    .from(lessons)
-    .where(eq(lessons.levelId, levelId))
-    .orderBy(lessons.order);
+  return await db.select().from(lessons).where(eq(lessons.levelId, levelId)).orderBy(lessons.order);
 }
-
-export async function getLessonById(lessonId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(lessons)
-    .where(eq(lessons.id, lessonId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
-}
-
-// ============================================
-// Quiz Queries
-// ============================================
 
 export async function getQuizzesByLesson(lessonId: number) {
   const db = await getDb();
   if (!db) return [];
 
-  return db
-    .select()
-    .from(quizzes)
-    .where(eq(quizzes.lessonId, lessonId))
-    .orderBy(quizzes.order);
-}
-
-export async function getQuizById(quizId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(quizzes)
-    .where(eq(quizzes.id, quizId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  return await db.select().from(quizzes).where(eq(quizzes.lessonId, lessonId)).orderBy(quizzes.order);
 }
 
 export async function getQuizWithOptions(quizId: number) {
   const db = await getDb();
-  if (!db) return undefined;
+  if (!db) return null;
 
-  const quiz = await getQuizById(quizId);
-  if (!quiz) return undefined;
+  const quiz = await db.select().from(quizzes).where(eq(quizzes.id, quizId)).limit(1);
+  if (!quiz.length) return null;
 
-  const options = await db
-    .select()
-    .from(quizOptions)
-    .where(eq(quizOptions.quizId, quizId))
-    .orderBy(quizOptions.order);
+  const options = await db.select().from(quizOptions).where(eq(quizOptions.quizId, quizId)).orderBy(quizOptions.order);
 
-  return { ...quiz, options };
+  return {
+    ...quiz[0],
+    options,
+  };
 }
 
-// ============================================
-// User Progress Queries
-// ============================================
-
-export async function getUserQuizProgress(userId: number, quizId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(userQuizProgress)
-    .where(
-      and(
-        eq(userQuizProgress.userId, userId),
-        eq(userQuizProgress.quizId, quizId)
-      )
-    )
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function recordQuizCompletion(
-  userId: number,
-  quizId: number,
-  isCorrect: boolean
-) {
+/**
+ * Quiz Progress
+ */
+export async function recordQuizCompletion(userId: number, quizId: number, isCorrect: boolean): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
-  const existing = await getUserQuizProgress(userId, quizId);
+  const existing = await db
+    .select()
+    .from(userQuizProgress)
+    .where(and(eq(userQuizProgress.userId, userId), eq(userQuizProgress.quizId, quizId)))
+    .limit(1);
 
-  if (existing) {
+  if (existing.length > 0) {
     await db
       .update(userQuizProgress)
       .set({
         isCompleted: 1,
         isCorrect: isCorrect ? 1 : 0,
-        attemptCount: existing.attemptCount + 1,
+        attemptCount: existing[0].attemptCount + 1,
         completedAt: new Date(),
       })
-      .where(
-        and(
-          eq(userQuizProgress.userId, userId),
-          eq(userQuizProgress.quizId, quizId)
-        )
-      );
+      .where(and(eq(userQuizProgress.userId, userId), eq(userQuizProgress.quizId, quizId)));
   } else {
     await db.insert(userQuizProgress).values({
       userId,
@@ -295,31 +196,17 @@ export async function recordQuizCompletion(
   }
 }
 
-export async function getUserLessonProgress(userId: number, lessonId: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(userLessonProgress)
-    .where(
-      and(
-        eq(userLessonProgress.userId, userId),
-        eq(userLessonProgress.lessonId, lessonId)
-      )
-    )
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function markLessonComplete(userId: number, lessonId: number) {
+export async function markLessonComplete(userId: number, lessonId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
-  const existing = await getUserLessonProgress(userId, lessonId);
+  const existing = await db
+    .select()
+    .from(userLessonProgress)
+    .where(and(eq(userLessonProgress.userId, userId), eq(userLessonProgress.lessonId, lessonId)))
+    .limit(1);
 
-  if (!existing) {
+  if (!existing.length) {
     await db.insert(userLessonProgress).values({
       userId,
       lessonId,
@@ -329,56 +216,34 @@ export async function markLessonComplete(userId: number, lessonId: number) {
   }
 }
 
-// ============================================
-// Stock & Portfolio Queries
-// ============================================
-
-export async function getStockBySymbol(symbol: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-
-  const result = await db
-    .select()
-    .from(stocks)
-    .where(eq(stocks.symbol, symbol))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
-}
-
+/**
+ * Stock & Portfolio Management
+ */
 export async function getAllStocks() {
   const db = await getDb();
   if (!db) return [];
 
-  return db.select().from(stocks);
+  return await db.select().from(stocks);
 }
 
 export async function getUserPortfolioItems(userId: number) {
   const db = await getDb();
   if (!db) return [];
 
-  return db
-    .select()
-    .from(portfolioItems)
-    .where(eq(portfolioItems.userId, userId));
+  return await db.select().from(portfolioItems).where(eq(portfolioItems.userId, userId));
 }
 
 export async function getPortfolioItem(userId: number, stockId: number) {
   const db = await getDb();
-  if (!db) return undefined;
+  if (!db) return null;
 
   const result = await db
     .select()
     .from(portfolioItems)
-    .where(
-      and(
-        eq(portfolioItems.userId, userId),
-        eq(portfolioItems.stockId, stockId)
-      )
-    )
+    .where(and(eq(portfolioItems.userId, userId), eq(portfolioItems.stockId, stockId)))
     .limit(1);
 
-  return result.length > 0 ? result[0] : undefined;
+  return result.length > 0 ? result[0] : null;
 }
 
 export async function addOrUpdatePortfolioItem(
@@ -387,7 +252,7 @@ export async function addOrUpdatePortfolioItem(
   quantity: number,
   purchasePrice: number,
   currentValue: number
-) {
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
@@ -398,15 +263,9 @@ export async function addOrUpdatePortfolioItem(
       .update(portfolioItems)
       .set({
         quantity,
-        purchasePrice,
         currentValue,
       })
-      .where(
-        and(
-          eq(portfolioItems.userId, userId),
-          eq(portfolioItems.stockId, stockId)
-        )
-      );
+      .where(and(eq(portfolioItems.userId, userId), eq(portfolioItems.stockId, stockId)));
   } else {
     await db.insert(portfolioItems).values({
       userId,
@@ -419,24 +278,13 @@ export async function addOrUpdatePortfolioItem(
   }
 }
 
-export async function getPortfolioTransactions(userId: number) {
-  const db = await getDb();
-  if (!db) return [];
-
-  return db
-    .select()
-    .from(portfolioTransactions)
-    .where(eq(portfolioTransactions.userId, userId))
-    .orderBy(portfolioTransactions.transactionDate);
-}
-
 export async function recordTransaction(
   userId: number,
   stockId: number,
-  type: 'buy' | 'sell',
+  type: "buy" | "sell",
   quantity: number,
   price: number
-) {
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
@@ -451,4 +299,11 @@ export async function recordTransaction(
     totalAmount,
     transactionDate: new Date(),
   });
+}
+
+export async function getPortfolioTransactions(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db.select().from(portfolioTransactions).where(eq(portfolioTransactions.userId, userId));
 }

@@ -15,6 +15,13 @@
       "when": 1773069083473,
       "tag": "0001_high_bloodstorm",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1773133612636,
+      "tag": "0002_productive_scourge",
+      "breakpoints": true
     }
   ]
 }

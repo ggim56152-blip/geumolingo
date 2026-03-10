@@ -11,12 +11,15 @@ import LessonPage from "./pages/LessonPage";
 import QuizPage from "./pages/QuizPage";
 import PortfolioPage from "./pages/PortfolioPage";
 import ProfilePage from "./pages/ProfilePage";
+import AuthPage from "./pages/AuthPage";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
       <Route path={"/"} component={Home} />
+      <Route path={"/auth"} component={AuthPage} />
+      <Route path={"/dashboard"} component={LearningDashboard} />
       <Route path={"/learning"} component={LearningDashboard} />
       <Route path={"/learning/:levelId"} component={LevelPage} />
       <Route path={"/learning/:levelId/lesson/:lessonId"} component={LessonPage} />

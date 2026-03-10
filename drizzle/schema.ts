@@ -2,20 +2,17 @@ import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-or
 
 /**
  * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
+ * Email-based authentication system
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  email: varchar("email", { length: 320 }).notNull().unique(),
+  passwordHash: text("passwordHash").notNull(),
   name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
+  verificationToken: varchar("verificationToken", { length: 255 }),
+  emailVerified: int("emailVerified").default(0).notNull(),
+  openId: varchar("openId", { length: 64 }), // For backward compatibility
+  loginMethod: varchar("loginMethod", { length: 64 }).default("email"),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -41,7 +38,7 @@ export const userProfiles = mysqlTable("userProfiles", {
   totalLessonsCompleted: int("totalLessonsCompleted").default(0).notNull(),
   totalQuizzesCompleted: int("totalQuizzesCompleted").default(0).notNull(),
   portfolioValue: int("portfolioValue").default(1000000).notNull(),
-  badges: text("badges"), // JSON array as string
+  badges: text("badges"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -145,15 +142,16 @@ export type UserLessonProgress = typeof userLessonProgress.$inferSelect;
 export type InsertUserLessonProgress = typeof userLessonProgress.$inferInsert;
 
 /**
- * Stocks - Stock/ETF data for portfolio simulation
+ * Stocks - Stock/ETF data for portfolio simulation (NASDAQ stocks)
  */
 export const stocks = mysqlTable("stocks", {
   id: int("id").autoincrement().primaryKey(),
   symbol: varchar("symbol", { length: 20 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
-  currentPrice: int("currentPrice").notNull(), // Store as cents to avoid float precision issues
+  currentPrice: int("currentPrice").notNull(),
   priceUpdatedAt: timestamp("priceUpdatedAt").defaultNow().notNull(),
   description: text("description"),
+  sector: varchar("sector", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -168,9 +166,9 @@ export const portfolioItems = mysqlTable("portfolioItems", {
   userId: int("userId").notNull(),
   stockId: int("stockId").notNull(),
   quantity: int("quantity").notNull(),
-  purchasePrice: int("purchasePrice").notNull(), // Store as cents
+  purchasePrice: int("purchasePrice").notNull(),
   purchaseDate: timestamp("purchaseDate").notNull(),
-  currentValue: int("currentValue").notNull(), // Store as cents
+  currentValue: int("currentValue").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -187,8 +185,8 @@ export const portfolioTransactions = mysqlTable("portfolioTransactions", {
   stockId: int("stockId").notNull(),
   type: mysqlEnum("type", ["buy", "sell"]).notNull(),
   quantity: int("quantity").notNull(),
-  price: int("price").notNull(), // Store as cents
-  totalAmount: int("totalAmount").notNull(), // Store as cents
+  price: int("price").notNull(),
+  totalAmount: int("totalAmount").notNull(),
   transactionDate: timestamp("transactionDate").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
