@@ -9,7 +9,6 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }).notNull().unique(),
   passwordHash: text("passwordHash").notNull(),
   name: text("name"),
-  verificationToken: varchar("verificationToken", { length: 255 }),
   emailVerified: int("emailVerified").default(0).notNull(),
   openId: varchar("openId", { length: 64 }), // For backward compatibility
   loginMethod: varchar("loginMethod", { length: 64 }).default("email"),
